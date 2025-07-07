@@ -1,6 +1,7 @@
 streamlit
 st-gsheets-connection
 pandas
+numpy
 plotly
 joblib
 openai
