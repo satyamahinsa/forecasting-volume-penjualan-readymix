@@ -1,28 +1,14 @@
-# dependencies dasar & build tools
-numpy>=1.21
-cython>=0.29
-setuptools>=42
-wheel>=0.36
-
-# analisis & statistik
-pandas
-statsmodels
-pmdarima
-joblib
-tqdm
-holidays
-
-# visualisasi
-plotly
-
-# web & scraping
-beautifulsoup4
-requests
-
-# environment & API
-openai
-python-dotenv
-
-# streamlit & konektor
 streamlit
 st-gsheets-connection
+pandas
+pmdarima
+numpy
+plotly
+joblib
+openai
+python-dotenv
+requests
+statsmodels
+tqdm
+beautifulsoup4
+holidays
