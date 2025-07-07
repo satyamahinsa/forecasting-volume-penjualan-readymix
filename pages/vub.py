@@ -27,7 +27,7 @@ def generate_insight_with_gpt(df_full_forecast):
 
     {data_summary}
 
-    Berikan analisis tren, insight penting, dan rekomendasi bisnis berbasis data tersebut yang berfokus pada anak perusahaan PT Semen Indonesia, yaitu PT Solusi Bangun Beton. Tulis dalam bahasa Indonesia yang formal dan ringkas.
+    Berikan analisis tren, insight penting, dan rekomendasi bisnis berbasis data tersebut yang berfokus pada anak perusahaan PT Semen Indonesia, yaitu PT Varia Usaha Beton. Tulis dalam bahasa Indonesia yang formal dan ringkas.
     """
     try:
         response = client.chat.completions.create(
@@ -57,7 +57,6 @@ def show():
         periode_full = df.index.to_pydatetime()
         bulan_min = periode_full.min()
         bulan_max = periode_full.max()
-        bulan_max_prediksi = pd.to_datetime(bulan_max) + pd.DateOffset(months=12)
 
         periode_2025 = pd.date_range(start="2025-01-01", end="2025-12-01", freq="MS")
         bulan_min_default = periode_2025.min()
@@ -66,7 +65,7 @@ def show():
         bulan_awal, bulan_akhir = st.slider(
             "Pilih rentang bulan:",
             min_value=bulan_min,
-            max_value=bulan_max_prediksi.to_pydatetime(),
+            max_value=bulan_max,
             value=(bulan_min_default.to_pydatetime(), bulan_max_default.to_pydatetime()),
             format="MM/YYYY"
         )

@@ -174,7 +174,6 @@ def data_scraping():
     df_forecast_bi_rate = pd.DataFrame({
         'BI Rate': forecast_bi_rate_future.values
     }, index=pd.date_range(start='2025-01-01', periods=12, freq='MS'))
-    st.dataframe(df_forecast_bi_rate, use_container_width=True)
     
     # data scraping dan forecasting apbn infra 
     url = "https://media.kemenkeu.go.id/SinglePage/custompage?p=/Pages/Home/Anggaran-Infrastruktur"
@@ -413,8 +412,13 @@ with col1:
 # --- Edit Data ---
 with col2:
     with st.expander("✏️ Edit Data"):
-        last_periode = df.index.max() if not df.empty else pd.Timestamp.today()
-        periode_edit = st.date_input("Periode", value=last_periode, format="YYYY-MM-DD", key="edit_periode")
+        periode_list = df.index.strftime("%Y-%m-%d")
+        default_index = len(periode_list) - 1
+
+        periode_edit = st.selectbox("Periode",
+                                        periode_list,
+                                        index=default_index,
+                                        key="edit_periode")
 
         if periode_edit:
             p = pd.to_datetime(periode_edit)
