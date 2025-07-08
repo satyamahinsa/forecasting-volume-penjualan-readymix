@@ -8,7 +8,8 @@ from openai import OpenAI
 from dotenv import load_dotenv
 load_dotenv()
 
-client = OpenAI(base_url="https://models.github.ai/inference", api_key=os.getenv("OPENAI_API_KEY"))
+api_key = st.secrets['openai']['api_key']
+client = OpenAI(base_url="https://models.github.ai/inference", api_key=api_key)
 
 def reload_df(conn):
     df = conn.read(worksheet="VUB")
