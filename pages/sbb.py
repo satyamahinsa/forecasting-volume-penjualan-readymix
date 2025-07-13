@@ -1,7 +1,12 @@
 import streamlit as st
 from streamlit_gsheets import GSheetsConnection
 import pandas as pd
+import numpy as np
 import plotly.graph_objects as go
+import pmdarima as pm
+from statsmodels.tsa.statespace.sarimax import SARIMAX
+import itertools
+from tqdm import tqdm
 import joblib
 import os
 from openai import OpenAI
@@ -11,18 +16,95 @@ load_dotenv()
 api_key = st.secrets['openai']['api_key']
 client = OpenAI(base_url="https://models.github.ai/inference", api_key=api_key)
 
-def reload_df(conn):
-    df = conn.read(worksheet="SBB")
+def reload_df(conn, sheet_name):
+    df = conn.read(worksheet=sheet_name)
     df["Periode"] = pd.to_datetime(df["Periode"]).dt.normalize()
     df.set_index("Periode", inplace=True)
     return df.sort_index()
 
+
+def evaluate_forecast(y_true, y_pred):
+    y_true = np.array(y_true)
+    y_pred = np.array(y_pred)
+
+    mae = np.mean(np.abs(y_true - y_pred))
+    rmse = np.sqrt(np.mean((y_true - y_pred)**2))
+    mape = np.mean(np.abs((y_true - y_pred) / y_true)) * 100
+    smape = 100 * np.mean(2 * np.abs(y_pred - y_true) / (np.abs(y_true) + np.abs(y_pred)))
+    accuracy = 100 - mape  # definisi sederhana: 100% - MAPE
+    
+    return {
+        'MAE': mae,
+        'RMSE': rmse,
+        'MAPE (%)': mape,
+        'sMAPE (%)': smape,
+        'Accuracy (%)': accuracy
+    }
+
+
 @st.cache_resource
-def load_model():
-    return joblib.load("models/model_sarimax_sbb_update.pkl")
+def load_model(df_existing):
+    last_year = df_existing.index.max().year
+    train_df = df_existing[(df_existing.index.year < last_year)]
+    test_df = df_existing[(df_existing.index.year >= last_year)]
+    
+    model = pm.auto_arima(train_df['Volume'], m=12, seasonal=True, 
+                        start_p=0, start_q=0, max_order=8, 
+                        test='adf',error_action='ignore',
+                        suppress_warnings=True, stepwise=True, trace=True)
+    order = model.get_params()['order']
+    seasonal_order = model.get_params()['seasonal_order']
+    # Daftar kandidat fitur
+    candidate_features = ['BI Rate', 'Inflasi', 'APBN Infra',
+                        'Effective Working Days', 'PDB Konstruksi']
+
+    # Tempat menyimpan hasil
+    results = []
+
+    # Loop kombinasi subset fitur
+    for k in range(2, 5):  # ubah rentang jika perlu
+        for subset in tqdm(list(itertools.combinations(candidate_features, k))):
+            # 1. Buat model SARIMAX
+            model = SARIMAX(train_df['Volume'],
+                            exog=train_df[list(subset)],
+                            order=order,
+                            seasonal_order=seasonal_order)
+            model_fit = model.fit(disp=False)
+
+            # 2. Prediksi
+            y_pred = model_fit.predict(start=test_df['Volume'].index[0],
+                                    end=test_df['Volume'].index[-1],
+                                    exog=test_df[list(subset)],
+                                    dynamic=False)
+            y_true = test_df['Volume'].values
+
+            # 3. Hitung metrik akurasi & error
+            metrics = evaluate_forecast(y_true, y_pred)
+
+            # 4. Simpan hasil
+            results.append({
+                'features': subset,
+                'MAE': metrics['MAE'],
+                'RMSE': metrics['RMSE'],
+                'MAPE (%)': metrics['MAPE (%)'],
+                'sMAPE (%)': metrics['sMAPE (%)'],
+                'Accuracy (%)': metrics['Accuracy (%)']
+            })
+
+    # Konversi ke DataFrame
+    result_df = pd.DataFrame(results)
+
+    # Sorting berdasarkan Accuracy tertinggi
+    best_by_accuracy = result_df.sort_values(by='Accuracy (%)', ascending=False).reset_index(drop=True)
+    best_features = best_by_accuracy.iloc[0]['features']
+    model = SARIMAX(df_existing['Volume'], exog=df_existing[list(best_features)], order=order, seasonal_order=seasonal_order)
+    model_fit = model.fit()
+    st.write(best_by_accuracy)
+    return model_fit, list(best_features)
+    # return joblib.load("models/model_sarimax_sbb_update.pkl")
 
 def generate_insight_with_gpt(df_full_forecast):
-    data_summary = df_full_forecast[["Volume"]].tail(12).to_string()
+    data_summary = df_full_forecast[["Forecasting"]].tail(12).to_string()
     prompt = f"""
     Berikut adalah hasil peramalan volume penjualan readymix unit SBB PT Semen Indonesia selama 12 bulan ke depan:
 
@@ -48,53 +130,67 @@ def show():
     conn = st.connection("gsheets", type=GSheetsConnection)
 
     if "df_sbb" not in st.session_state:
-        st.session_state.df_sbb = reload_df(conn)
+        st.session_state.df_sbb = reload_df(conn, "SBB")
+    
+    if "df_forecasting_assumptions" not in st.session_state:
+        st.session_state.df_forecasting_assumptions = reload_df(conn, "Forecasting SBB")
 
     df = st.session_state.df_sbb
+    forecasting_assumptions = st.session_state.df_forecasting_assumptions
+    st.write(forecasting_assumptions.index.min())
 
-    # Sidebar filter
     with st.sidebar:
         st.markdown("🗓️ **Filter Hasil Prediksi**")
-        periode_full = df.index.to_pydatetime()
+        combined_index = pd.date_range(
+            start=df.index.min(),
+            end=forecasting_assumptions.index.max(),
+            freq='MS'
+        )
+        periode_full = combined_index
         bulan_min = periode_full.min()
         bulan_max = periode_full.max()
 
-        periode_2025 = pd.date_range(start="2025-01-01", end="2025-12-01", freq="MS")
-        bulan_min_default = periode_2025.min()
-        bulan_max_default = periode_2025.max()
+        # periode_2025 = pd.date_range(start=bulan_min, end=bulan_max, freq="MS")
+        # bulan_min_default = periode_2025.min()
+        # bulan_max_default = periode_2025.max()
 
         bulan_awal, bulan_akhir = st.slider(
             "Pilih rentang bulan:",
             min_value=bulan_min,
             max_value=bulan_max,
-            value=(bulan_min_default.to_pydatetime(), bulan_max_default.to_pydatetime()),
+            value=(forecasting_assumptions.index.min().to_pydatetime(), forecasting_assumptions.index.max().to_pydatetime()),
             format="MM/YYYY"
         )
 
-    df = st.session_state.df_sbb.copy()
 
     try:
-        model_fit = load_model()
-        exog_features = ['Inflasi', 'APBN Infra', 'Effective Working Days']
-        exog_hist = df[exog_features]
+        model_fit, best_features = load_model(df)
+        exog_df = forecasting_assumptions[best_features]
         
-        forecast_12_months = model_fit.forecast(steps=12, exog=exog_hist[-12:])
+        forecast_12_months = model_fit.forecast(steps=12, exog=exog_df[:12])
         forecasting_final = pd.DataFrame({
-            "Volume": forecast_12_months
-        }, index=pd.date_range(start=periode_2025[0], periods=12, freq='MS'))
+            "Forecasting": forecast_12_months
+        }, index=pd.date_range(start=forecasting_assumptions.index.min(), periods=12, freq='MS'))
+        st.dataframe(forecasting_final)
+        # st.session_state.df_forecasting_assumptions['Forecasting'] = forecasting_final
+        # conn.update(worksheet="Forecasting SBB", data=st.session_state.df_forecasting_assumptions.reset_index())
         
         # lakukan filter pada df hingga volume aktual yang tidak memiliki 0
-        df_filtered = df[(df.index >= bulan_awal) & (df.index <= bulan_akhir) & (df["Volume"] > 0)] 
-        forecasting_final = forecasting_final[(forecasting_final.index >= bulan_awal) & (forecasting_final.index <= bulan_akhir)]
-        # filtered_df_full_forecast = forecasting_final[(forecasting_final.index >= bulan_awal) & (forecasting_final.index <= bulan_akhir)]
+        df_filtered = df[(df.index >= bulan_awal) & (df.index <= bulan_akhir)]
+        forecasting_existing = df_filtered[(df_filtered.index >= bulan_awal) & (df_filtered.index <= bulan_akhir)]['Forecasting']
+        
+        full_forecasting = pd.concat([
+            forecasting_existing,
+            forecasting_final
+        ])
 
         st.subheader("📈 Hasil Peramalan")
 
         fig = go.Figure()
         # trace untuk Volume Prediksi (forecasting_final)
         fig.add_trace(go.Scatter(
-            x=forecasting_final.index,
-            y=forecasting_final["Volume"],
+            x=full_forecasting.index,
+            y=full_forecasting["Forecasting"],
             mode="lines+markers+text",
             name="Volume Prediksi",
             textposition="top center",
