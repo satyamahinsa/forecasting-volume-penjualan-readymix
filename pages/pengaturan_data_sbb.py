@@ -44,7 +44,7 @@ def update_dataframe(df, updates_dict):
     return df
 
 def scrape_inflasi():
-    API_KEY = '01885d016e24d4a4bce1862bdd1c6ad7'
+    API_KEY = st.secrets['scraping']['api_key']
     url = f"https://webapi.bps.go.id/v1/api/view/domain/0000/model/statictable/lang/ind/id/915/key/{API_KEY}"
     response = requests.get(url)
     json_data = response.json()
@@ -97,7 +97,7 @@ def scrape_inflasi():
 
 
 def scrape_bi_rate():
-    API_KEY = '01885d016e24d4a4bce1862bdd1c6ad7'
+    API_KEY = st.secrets['scraping']['api_key']
     url = f'https://webapi.bps.go.id/v1/api/list/model/data/lang/ind/domain/0000/var/379/key/{API_KEY}?th=2020-2025'
 
     response = requests.get(url)
@@ -366,7 +366,7 @@ def update_or_forecast_column(col_name, df_existing, df_scraped, df_forecast, gl
     return updated_actual, forecast_df
 
 
-def process_all_columns(df_existing, scraped_data_dict, sheet_updater, start_year=2020):
+def process_all_columns(df_existing, scraped_data_dict, sheet_updater, update_forecasting, start_year=2020):
     updated_actuals = df_existing.copy()
     forecast_assumptions = pd.DataFrame(columns=['Periode'])
 
@@ -432,11 +432,12 @@ def process_all_columns(df_existing, scraped_data_dict, sheet_updater, start_yea
         forecast_assumptions[col] = forecast_df_col.values
     
     forecast_assumptions.set_index('Periode', inplace=True)
-    sheet_updater(forecast_assumptions, sheet_name="Forecasting SBB")
+    if update_forecasting:
+        sheet_updater(forecast_assumptions, sheet_name="Forecasting SBB")
 
     return updated_actuals
 
-def data_scraping(df, forecasting_assumptions, sheet_updater, start_year=2020):
+def data_scraping(df, forecasting_assumptions, sheet_updater, update_forecasting, start_year=2020):
     prev_forecasting = forecasting_assumptions.copy()
     prev_forecasting = prev_forecasting['Forecasting']
     
@@ -452,11 +453,11 @@ def data_scraping(df, forecasting_assumptions, sheet_updater, start_year=2020):
         df,
         scraped_data_dict,
         sheet_updater=update_df_to_gsheet,
+        update_forecasting=update_forecasting,
         start_year=start_year
     )
     
     updated_actuals['Volume'] = updated_actuals['Volume'].fillna(0)
-    updated_actuals['Forecasting'] = updated_actuals['Forecasting'].fillna(0)
     
     mask = prev_forecasting.index.isin(updated_actuals.index)
     for idx in prev_forecasting.index[mask]:
@@ -481,10 +482,16 @@ st.dataframe(df)
 
 # --- Update Data Otomatis ---
 with st.expander("🔄 Update Data Otomatis", expanded=True):
+    update_forecasting = st.checkbox(
+        "Perbarui data asumsi",
+        value=False,
+        help="Hilangkan centang jika tidak ingin memperbarui data asumsi."
+    )
+
     if st.button("Ambil Data dari API", type="primary"):
         with st.spinner("Mengambil dan memproses data..."):
             try:
-                update_actuals = data_scraping(df, forecasting_assumptions, update_df_to_gsheet, 2020)
+                update_actuals = data_scraping(df, forecasting_assumptions, update_df_to_gsheet, update_forecasting, 2020)
                 st.session_state.df_sbb = update_actuals
                 st.toast("Data berhasil diperbarui!", icon="✅")
                 time.sleep(1)

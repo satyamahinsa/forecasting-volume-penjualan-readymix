@@ -23,85 +23,10 @@ def reload_df(conn, sheet_name):
     return df.sort_index()
 
 
-def evaluate_forecast(y_true, y_pred):
-    y_true = np.array(y_true)
-    y_pred = np.array(y_pred)
-
-    mae = np.mean(np.abs(y_true - y_pred))
-    rmse = np.sqrt(np.mean((y_true - y_pred)**2))
-    mape = np.mean(np.abs((y_true - y_pred) / y_true)) * 100
-    smape = 100 * np.mean(2 * np.abs(y_pred - y_true) / (np.abs(y_true) + np.abs(y_pred)))
-    accuracy = 100 - mape  # definisi sederhana: 100% - MAPE
-    
-    return {
-        'MAE': mae,
-        'RMSE': rmse,
-        'MAPE (%)': mape,
-        'sMAPE (%)': smape,
-        'Accuracy (%)': accuracy
-    }
-
-
 @st.cache_resource
-def load_model(df_existing):
-    last_year = df_existing.index.max().year
-    train_df = df_existing[(df_existing.index.year < last_year)]
-    test_df = df_existing[(df_existing.index.year >= last_year)]
-    
-    model = pm.auto_arima(train_df['Volume'], m=12, seasonal=True, 
-                        start_p=0, start_q=0, max_order=8, 
-                        test='adf',error_action='ignore',
-                        suppress_warnings=True, stepwise=True, trace=True)
-    order = model.get_params()['order']
-    seasonal_order = model.get_params()['seasonal_order']
-    # Daftar kandidat fitur
-    candidate_features = ['BI Rate', 'Inflasi', 'APBN Infra',
-                        'Effective Working Days', 'PDB Konstruksi']
+def load_model():
+    return joblib.load("models/model_sarimax_sbb_update_final.pkl")
 
-    # Tempat menyimpan hasil
-    results = []
-
-    # Loop kombinasi subset fitur
-    for k in range(2, 5):  # ubah rentang jika perlu
-        for subset in tqdm(list(itertools.combinations(candidate_features, k))):
-            # 1. Buat model SARIMAX
-            model = SARIMAX(train_df['Volume'],
-                            exog=train_df[list(subset)],
-                            order=order,
-                            seasonal_order=seasonal_order)
-            model_fit = model.fit(disp=False)
-
-            # 2. Prediksi
-            y_pred = model_fit.predict(start=test_df['Volume'].index[0],
-                                    end=test_df['Volume'].index[-1],
-                                    exog=test_df[list(subset)],
-                                    dynamic=False)
-            y_true = test_df['Volume'].values
-
-            # 3. Hitung metrik akurasi & error
-            metrics = evaluate_forecast(y_true, y_pred)
-
-            # 4. Simpan hasil
-            results.append({
-                'features': subset,
-                'MAE': metrics['MAE'],
-                'RMSE': metrics['RMSE'],
-                'MAPE (%)': metrics['MAPE (%)'],
-                'sMAPE (%)': metrics['sMAPE (%)'],
-                'Accuracy (%)': metrics['Accuracy (%)']
-            })
-
-    # Konversi ke DataFrame
-    result_df = pd.DataFrame(results)
-
-    # Sorting berdasarkan Accuracy tertinggi
-    best_by_accuracy = result_df.sort_values(by='Accuracy (%)', ascending=False).reset_index(drop=True)
-    best_features = best_by_accuracy.iloc[0]['features']
-    model = SARIMAX(df_existing['Volume'], exog=df_existing[list(best_features)], order=order, seasonal_order=seasonal_order)
-    model_fit = model.fit()
-    st.write(best_by_accuracy)
-    return model_fit, list(best_features)
-    # return joblib.load("models/model_sarimax_sbb_update.pkl")
 
 def generate_insight_with_gpt(df_full_forecast):
     data_summary = df_full_forecast[["Forecasting"]].tail(12).to_string()
@@ -137,7 +62,6 @@ def show():
 
     df = st.session_state.df_sbb
     forecasting_assumptions = st.session_state.df_forecasting_assumptions
-    st.write(forecasting_assumptions.index.min())
 
     with st.sidebar:
         st.markdown("🗓️ **Filter Hasil Prediksi**")
@@ -164,16 +88,16 @@ def show():
 
 
     try:
-        model_fit, best_features = load_model(df)
+        best_features = ['Inflasi', 'APBN Infra', 'Effective Working Days']
+        model_fit = load_model()
         exog_df = forecasting_assumptions[best_features]
         
         forecast_12_months = model_fit.forecast(steps=12, exog=exog_df[:12])
         forecasting_final = pd.DataFrame({
             "Forecasting": forecast_12_months
         }, index=pd.date_range(start=forecasting_assumptions.index.min(), periods=12, freq='MS'))
-        st.dataframe(forecasting_final)
-        # st.session_state.df_forecasting_assumptions['Forecasting'] = forecasting_final
-        # conn.update(worksheet="Forecasting SBB", data=st.session_state.df_forecasting_assumptions.reset_index())
+        st.session_state.df_forecasting_assumptions['Forecasting'] = forecasting_final
+        conn.update(worksheet="Forecasting SBB", data=st.session_state.df_forecasting_assumptions.reset_index())
         
         # lakukan filter pada df hingga volume aktual yang tidak memiliki 0
         df_filtered = df[(df.index >= bulan_awal) & (df.index <= bulan_akhir)]

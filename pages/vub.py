@@ -1,7 +1,12 @@
 import streamlit as st
 from streamlit_gsheets import GSheetsConnection
 import pandas as pd
+import numpy as np
 import plotly.graph_objects as go
+import pmdarima as pm
+from statsmodels.tsa.statespace.sarimax import SARIMAX
+import itertools
+from tqdm import tqdm
 import joblib
 import os
 from openai import OpenAI
@@ -11,18 +16,19 @@ load_dotenv()
 api_key = st.secrets['openai']['api_key']
 client = OpenAI(base_url="https://models.github.ai/inference", api_key=api_key)
 
-def reload_df(conn):
-    df = conn.read(worksheet="VUB")
+def reload_df(conn, sheet_name):
+    df = conn.read(worksheet=sheet_name)
     df["Periode"] = pd.to_datetime(df["Periode"]).dt.normalize()
     df.set_index("Periode", inplace=True)
     return df.sort_index()
 
+
 @st.cache_resource
 def load_model():
-    return joblib.load("models/model_sarimax_vub_update.pkl")
+    return joblib.load("models/model_sarimax_vub_update_final.pkl")
 
 def generate_insight_with_gpt(df_full_forecast):
-    data_summary = df_full_forecast[["Volume"]].tail(12).to_string()
+    data_summary = df_full_forecast[["Forecasting"]].tail(12).to_string()
     prompt = f"""
     Berikut adalah hasil peramalan volume penjualan readymix unit VUB PT Semen Indonesia selama 12 bulan ke depan:
 
@@ -48,53 +54,66 @@ def show():
     conn = st.connection("gsheets", type=GSheetsConnection)
 
     if "df_vub" not in st.session_state:
-        st.session_state.df_vub = reload_df(conn)
+        st.session_state.df_vub = reload_df(conn, "VUB")
+    
+    if "df_forecasting_assumptions" not in st.session_state:
+        st.session_state.df_forecasting_assumptions = reload_df(conn, "Forecasting VUB")
 
     df = st.session_state.df_vub
+    forecasting_assumptions = st.session_state.df_forecasting_assumptions
 
-    # Sidebar filter
     with st.sidebar:
         st.markdown("🗓️ **Filter Hasil Prediksi**")
-        periode_full = df.index.to_pydatetime()
+        combined_index = pd.date_range(
+            start=df.index.min(),
+            end=forecasting_assumptions.index.max(),
+            freq='MS'
+        )
+        periode_full = combined_index
         bulan_min = periode_full.min()
         bulan_max = periode_full.max()
 
-        periode_2025 = pd.date_range(start="2025-01-01", end="2025-12-01", freq="MS")
-        bulan_min_default = periode_2025.min()
-        bulan_max_default = periode_2025.max()
+        # periode_2025 = pd.date_range(start=bulan_min, end=bulan_max, freq="MS")
+        # bulan_min_default = periode_2025.min()
+        # bulan_max_default = periode_2025.max()
 
         bulan_awal, bulan_akhir = st.slider(
             "Pilih rentang bulan:",
             min_value=bulan_min,
             max_value=bulan_max,
-            value=(bulan_min_default.to_pydatetime(), bulan_max_default.to_pydatetime()),
+            value=(forecasting_assumptions.index.min().to_pydatetime(), forecasting_assumptions.index.max().to_pydatetime()),
             format="MM/YYYY"
         )
 
-    df = st.session_state.df_vub.copy()
 
     try:
+        best_features = ['BI Rate', 'APBN Infra', 'PDB Konstruksi']
         model_fit = load_model()
-        exog_features = ['BI Rate', 'APBN Infra', 'PDB Konstruksi']
-        exog_hist = df[exog_features]
+        exog_df = forecasting_assumptions[best_features]
         
-        forecast_12_months = model_fit.forecast(steps=12, exog=exog_hist[-12:])
+        forecast_12_months = model_fit.forecast(steps=12, exog=exog_df[:12])
         forecasting_final = pd.DataFrame({
-            "Volume": forecast_12_months
-        }, index=pd.date_range(start=periode_2025[0], periods=12, freq='MS'))
+            "Forecasting": forecast_12_months
+        }, index=pd.date_range(start=forecasting_assumptions.index.min(), periods=12, freq='MS'))
+        st.session_state.df_forecasting_assumptions['Forecasting'] = forecasting_final
+        conn.update(worksheet="Forecasting VUB", data=st.session_state.df_forecasting_assumptions.reset_index())
         
         # lakukan filter pada df hingga volume aktual yang tidak memiliki 0
-        df_filtered = df[(df.index >= bulan_awal) & (df.index <= bulan_akhir) & (df["Volume"] > 0)] 
-        forecasting_final = forecasting_final[(forecasting_final.index >= bulan_awal) & (forecasting_final.index <= bulan_akhir)]
-        # filtered_df_full_forecast = forecasting_final[(forecasting_final.index >= bulan_awal) & (forecasting_final.index <= bulan_akhir)]
+        df_filtered = df[(df.index >= bulan_awal) & (df.index <= bulan_akhir)]
+        forecasting_existing = df_filtered[(df_filtered.index >= bulan_awal) & (df_filtered.index <= bulan_akhir)]['Forecasting']
+        
+        full_forecasting = pd.concat([
+            forecasting_existing,
+            forecasting_final
+        ])
 
         st.subheader("📈 Hasil Peramalan")
 
         fig = go.Figure()
         # trace untuk Volume Prediksi (forecasting_final)
         fig.add_trace(go.Scatter(
-            x=forecasting_final.index,
-            y=forecasting_final["Volume"],
+            x=full_forecasting.index,
+            y=full_forecasting["Forecasting"],
             mode="lines+markers+text",
             name="Volume Prediksi",
             textposition="top center",
