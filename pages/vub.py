@@ -27,14 +27,17 @@ def reload_df(conn, sheet_name):
 def load_model():
     return joblib.load("models/model_sarimax_vub_update_final.pkl")
 
+
 def generate_insight_with_gpt(df_full_forecast):
     data_summary = df_full_forecast[["Forecasting"]].tail(12).to_string()
     prompt = f"""
-    Berikut adalah hasil peramalan volume penjualan readymix unit VUB PT Semen Indonesia selama 12 bulan ke depan:
-
+    PT Varia Usaha Beton (PT VUB) adalah anak perusahaan dari PT Semen Indonesia Beton yang bergerak di bidang produksi dan distribusi beton siap pakai (ready-mix), beton pracetak, dan material konstruksi lainnya. Berdiri sejak tahun 1991, PT VUB melayani berbagai kebutuhan konstruksi mulai dari infrastruktur besar hingga pembangunan komersial dan perumahan. Dengan lebih dari 30 plant yang tersebar di Jawa, Sulawesi, Kalimantan, dan Nusa Tenggara Barat, PT VUB memiliki jaringan distribusi yang luas serta didukung kuari internal untuk menjamin pasokan bahan baku. Perusahaan ini juga menyediakan layanan pengecoran, penyewaan concrete pump, dan produk beton inovatif seperti paving block dan pracetak. Mengusung prinsip profesionalisme, efisiensi, dan kepatuhan terhadap standar mutu internasional (ISO 9001, ISO 14001, OHSAS 18001), PT VUB menjadi salah satu penyedia solusi beton yang handal dan kompetitif di pasar nasional.
+    
+    Berikut adalah hasil peramalan volume penjualan readymix unit VUB selama 12 bulan ke depan:
+    
     {data_summary}
 
-    Berikan analisis tren, insight penting, dan rekomendasi bisnis berbasis data tersebut yang berfokus pada anak perusahaan PT Semen Indonesia, yaitu PT Varia Usaha Beton. Tulis dalam bahasa Indonesia yang formal dan ringkas.
+    Berdasarkan data tersebut dan latar belakang perusahaan di atas, lakukan analisis terhadap tren penjualan, temukan insight yang relevan, serta berikan rekomendasi bisnis strategis. Sampaikan dalam bahasa Indonesia yang formal, ringkas, dan berbasis data.
     """
     try:
         response = client.chat.completions.create(
@@ -47,6 +50,7 @@ def generate_insight_with_gpt(df_full_forecast):
         return response.choices[0].message.content
     except Exception as e:
         return f"⚠️ Gagal mendapatkan insight dari AI: {e}"
+
 
 def show():
     st.title("📊 Peramalan Volume Penjualan ReadyMix VUB")
@@ -73,10 +77,6 @@ def show():
         bulan_min = periode_full.min()
         bulan_max = periode_full.max()
 
-        # periode_2025 = pd.date_range(start=bulan_min, end=bulan_max, freq="MS")
-        # bulan_min_default = periode_2025.min()
-        # bulan_max_default = periode_2025.max()
-
         bulan_awal, bulan_akhir = st.slider(
             "Pilih rentang bulan:",
             min_value=bulan_min,
@@ -84,7 +84,6 @@ def show():
             value=(forecasting_assumptions.index.min().to_pydatetime(), forecasting_assumptions.index.max().to_pydatetime()),
             format="MM/YYYY"
         )
-
 
     try:
         best_features = ['BI Rate', 'APBN Infra', 'PDB Konstruksi']
@@ -97,8 +96,7 @@ def show():
         }, index=pd.date_range(start=forecasting_assumptions.index.min(), periods=12, freq='MS'))
         st.session_state.df_forecasting_assumptions['Forecasting'] = forecasting_final
         conn.update(worksheet="Forecasting VUB", data=st.session_state.df_forecasting_assumptions.reset_index())
-        
-        # lakukan filter pada df hingga volume aktual yang tidak memiliki 0
+
         df_filtered = df[(df.index >= bulan_awal) & (df.index <= bulan_akhir)]
         forecasting_existing = df_filtered[(df_filtered.index >= bulan_awal) & (df_filtered.index <= bulan_akhir)]['Forecasting']
         
@@ -110,7 +108,6 @@ def show():
         st.subheader("📈 Hasil Peramalan")
 
         fig = go.Figure()
-        # trace untuk Volume Prediksi (forecasting_final)
         fig.add_trace(go.Scatter(
             x=full_forecasting.index,
             y=full_forecasting["Forecasting"],
@@ -122,7 +119,6 @@ def show():
             hovertemplate="Volume Prediksi: %{y:.2f}<extra></extra>"
         ))
 
-        # trace untuk Data Aktual (df_filtered)
         fig.add_trace(go.Scatter(
             x=df_filtered.index,
             y=df_filtered["Volume"],
@@ -133,7 +129,6 @@ def show():
             hovertemplate="Volume Aktual: %{y:.2f}<extra></extra>"
         ))
 
-        # layout & opsi
         fig.update_layout(
             xaxis_title="Periode",
             yaxis_title="Volume",
@@ -154,6 +149,7 @@ def show():
     with st.spinner("Menghasilkan analisis dengan AI..."):
         insight = generate_insight_with_gpt(forecasting_final)
         st.markdown(insight)
+
 
 if __name__ == "__main__" or st.runtime.exists():
     show()

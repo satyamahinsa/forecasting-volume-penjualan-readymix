@@ -22,8 +22,10 @@ def reload_df(conn, sheet_name):
     df.set_index("Periode", inplace=True)
     return df.sort_index()
 
+
 def update_df_to_gsheet(df, sheet_name="VUB"):
     conn.update(worksheet=sheet_name, data=df.reset_index())
+
 
 def get_effective_working_days(year, month):
     indo_holidays = holidays.country_holidays('ID', years=[year])
@@ -37,11 +39,13 @@ def get_effective_working_days(year, month):
         current += timedelta(days=1)
     return workdays
 
+
 def update_dataframe(df, updates_dict):
     """Update dataframe utama dengan hasil gabungan."""
     for col_name, series_update in updates_dict.items():
         df.loc[series_update.index, col_name] = series_update.values
     return df
+
 
 def scrape_inflasi():
     API_KEY = st.secrets['scraping']['api_key']
@@ -105,9 +109,8 @@ def scrape_bi_rate():
     datacontent = data.get('datacontent', {})
 
     data_list = []
-
     for kode, value in datacontent.items():
-        timecode = kode[6:]  # Ambil bagian akhir kode waktu
+        timecode = kode[6:]
 
         try:
             if len(timecode) == 3:
@@ -143,7 +146,6 @@ def scrape_bi_rate():
 
 
 def scrape_apbn_infra():
-    # ——— Ambil APBN Infrastruktur dari Kemenkeu ———
     url = "https://media.kemenkeu.go.id/SinglePage/custompage?p=/Pages/Home/Anggaran-Infrastruktur"
     data = json.loads(requests.get(url).text)['Data']['Content']
 
@@ -154,7 +156,6 @@ def scrape_apbn_infra():
         ]
     })
 
-    # Tambahkan data 2025 dari berita bisnis.com
     url_apbn_2025 = 'https://ekonomi.bisnis.com/read/20240816/45/1791651/anggaran-infrastruktur-rp400-triliun-untuk-proyek-prioritas-di-2025-apa-saja'
     response = requests.get(url_apbn_2025)
     soup = BeautifulSoup(response.text, 'html.parser')
@@ -171,10 +172,8 @@ def scrape_apbn_infra():
         df_apbn.loc[len(df_apbn)] = [tahun_2025, anggaran_2025]
 
     df_apbn = df_apbn.sort_values('Tahun').reset_index(drop=True)
-
     df_existing = st.session_state.df_vub
     
-    # ——— Hitung data aktual bulanan ———
     periode_terakhir = df_existing.index.max()
     tahun_terakhir = periode_terakhir.year
 
@@ -185,9 +184,7 @@ def scrape_apbn_infra():
         month = idx.month
         volume = row['Volume']
 
-        # ambil APBN tahunan
         apbn_value = df_apbn[df_apbn['Tahun'] == year]['APBN Infrastruktur'].values[0]
-        # hitung proporsi bulan thd total tahun
         comparison_year = tahun_terakhir - 1 if year == tahun_terakhir else year
         total_volume = df_existing[df_existing.index.year == comparison_year]['Volume'].sum()
         ratio = volume / total_volume if total_volume > 0 else 0
@@ -208,27 +205,22 @@ def scrape_apbn_infra():
     df_result.set_index('Periode', inplace=True)
     df_result.drop(columns=['Tahun', 'Bulan'], inplace=True)
     
-
     return df_result
 
 
 def forecast_apbn_infra(df_actual):
-    # ——— Hitung prediksi 12 bulan ke depan ———
     forecast_periods = pd.date_range(
         start=df_actual.index.max() + pd.DateOffset(months=1),
         periods=13, freq='MS'
     )
 
     df_result = df_actual.copy()
-
-    # buat list untuk menyimpan baris hasil forecast
     forecast_rows = []
 
     for periode in forecast_periods:
         year = periode.year
         month = periode.month
 
-        # fallback ke tahun-1 atau tahun-2
         apbn_per_month = None
         for offset in [1, 2]:
             prev_year = year - offset
@@ -237,7 +229,6 @@ def forecast_apbn_infra(df_actual):
                 apbn_per_month = df_result.loc[mask, 'APBN Infra'].values[0]
                 break
 
-        # jika tetap None, misalnya data sangat terbatas, default-kan ke 0
         if apbn_per_month is None:
             apbn_per_month = 0.0
 
@@ -247,23 +238,19 @@ def forecast_apbn_infra(df_actual):
             'APBN Infra': apbn_per_month,
         })
 
-    # ——— Gabungkan hasil lama + forecast ———
     df_forecast = pd.DataFrame(forecast_rows)
     df_combined = pd.concat([
         df_result.reset_index().rename(columns={'Periode': 'Periode'}),
         df_forecast
     ], ignore_index=True)
 
-    # ——— Finalisasi index & kolom ———
     df_combined['Periode'] = pd.to_datetime(
         df_combined[['Tahun', 'Bulan']].rename(columns={'Tahun': 'year', 'Bulan': 'month'}).assign(day=1)
     )
     df_combined.set_index('Periode', inplace=True)
     df_combined.drop(columns=['Tahun', 'Bulan'], inplace=True)
 
-    # urutkan indeks
     df_combined.sort_index(inplace=True)
-
     return df_combined
 
 
@@ -287,8 +274,8 @@ def scrape_effective_working_days():
 
     df_ewd = pd.DataFrame(data).set_index('Periode').sort_index()
     df_ewd = df_ewd[['Effective Working Days']]
-
     return df_ewd
+
 
 def forecast_effective_working_days(df_actual):
     df_existing = df_actual
@@ -311,7 +298,6 @@ def forecast_effective_working_days(df_actual):
     
     df_ewd = pd.DataFrame(data).set_index('Periode').sort_index()
     df_ewd = df_ewd[['Effective Working Days']]
-
     return df_ewd
 
 
@@ -341,7 +327,6 @@ def update_or_forecast_column(col_name, df_existing, df_scraped, df_forecast, gl
         freq='MS'
     )
 
-    # kerangka kosong
     combined = pd.DataFrame(index=combined_index, columns=[col_name], dtype=float)
 
     for idx in combined_index:
@@ -350,19 +335,14 @@ def update_or_forecast_column(col_name, df_existing, df_scraped, df_forecast, gl
         forecast_val = df_forecast.loc[idx, col_name] if idx in df_forecast.index else None
 
         if current_val is not None and not pd.isna(current_val):
-            # sudah ada nilai valid di df_existing → pakai itu
             combined.loc[idx, col_name] = current_val
         elif scraped_val is not None and not pd.isna(scraped_val):
-            # kalau scraping terbaru ada & valid → isi
             combined.loc[idx, col_name] = scraped_val
         elif forecast_val is not None and not pd.isna(forecast_val):
-            # kalau tetap kosong → pakai forecast
             combined.loc[idx, col_name] = forecast_val
-        # kalau forecast juga None → biarkan NaN
 
     updated_actual = combined.loc[combined.index <= global_latest_index]
     forecast_df = df_forecast.loc[df_forecast.index > global_latest_index, [col_name]]
-
     return updated_actual, forecast_df
 
 
@@ -370,7 +350,6 @@ def process_all_columns(df_existing, scraped_data_dict, sheet_updater, update_fo
     updated_actuals = df_existing.copy()
     forecast_assumptions = pd.DataFrame(columns=['Periode'])
 
-    # cari global_latest_index dari semua hasil scraping
     all_latest_indices = []
     for col, df_scraped in scraped_data_dict.items():
         if not df_scraped.empty:
@@ -410,7 +389,6 @@ def process_all_columns(df_existing, scraped_data_dict, sheet_updater, update_fo
         forecast_assumptions['Periode'] = forecast_df_col.index
         forecast_assumptions[col] = forecast_df_col.values
 
-    # Kolom yang hanya scraped saja
     for col in scraped_only_columns:
         df_col = df_existing[[col]]
         df_col = df_col[df_col.index.year >= start_year]
@@ -480,7 +458,7 @@ forecasting_assumptions = st.session_state.df_forecasting_assumptions
 
 st.dataframe(df)
 
-# --- Update Data Otomatis ---
+
 with st.expander("🔄 Update Data Otomatis", expanded=True):
     update_forecasting = st.checkbox(
         "Perbarui data asumsi",
@@ -501,7 +479,7 @@ with st.expander("🔄 Update Data Otomatis", expanded=True):
 
 col1, col2, col3 = st.columns(3)
 
-# --- Input Data Baru ---
+
 with col1:
     with st.expander("➕ Input Data Baru", expanded=True):
         last_periode = df.index.max() if not df.empty else pd.Timestamp.today()
@@ -540,12 +518,11 @@ with col1:
                 time.sleep(1)
                 st.rerun()
 
-# --- Edit Data ---
+
 with col2:
     with st.expander("✏️ Edit Data", expanded=True):
         periode_list = df.index.strftime("%Y-%m-%d")
         default_index = len(periode_list) - 1
-
         periode_edit = st.selectbox("Periode",
                                         periode_list,
                                         index=default_index,
@@ -590,7 +567,7 @@ with col2:
                 time.sleep(1)
                 st.rerun()
 
-# --- Delete Data ---
+
 with col3:
     with st.expander("🗑️ Hapus Data", expanded=True):
         periode_list = df.index.strftime("%Y-%m-%d")
@@ -615,22 +592,18 @@ with col3:
         elif submit_delete:
             st.toast("Mohon centang konfirmasi terlebih dahulu.", icon="⚠️")
 
+
 with st.expander("✏️ Update Data Asumsi"):
     updated_assumptions = st.data_editor(
         forecasting_assumptions,
         use_container_width=True
     )
 
-    # cek apakah sudah ada di session_state
     if "df_forecasting_assumptions" not in st.session_state:
         st.session_state.df_forecasting_assumptions = forecasting_assumptions
 
-    # hanya update jika ada perubahan nyata
     if not updated_assumptions.equals(st.session_state.df_forecasting_assumptions):
-        # simpan ke session_state
         st.session_state.df_forecasting_assumptions = updated_assumptions
-
-        # update ke Google Sheets
         update_df_to_gsheet(
             updated_assumptions,
             sheet_name="Forecasting VUB"
